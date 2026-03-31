@@ -20,6 +20,8 @@ const PORT = process.env.PORT || 3000;
 app.use(express.json());
 app.use(cookieParser());
 
+console.log("SUPABASE KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY);
+
 // ---------- SUPABASE ----------
 if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
   console.error("❌ Missing Supabase env vars");
