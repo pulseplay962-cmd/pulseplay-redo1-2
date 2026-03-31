@@ -24,6 +24,8 @@ const supabase = createClient(
 // ---------- IN-MEMORY REFRESH STORE (upgrade later to Redis) ----------
 const refreshTokens = new Set();
 
+console.log("OPENAI KEY EXISTS:", !!process.env.OPENAI_API_KEY);
+
 // ---------- JWT HELPERS ----------
 function createAccessToken(user) {
   return jwt.sign(
