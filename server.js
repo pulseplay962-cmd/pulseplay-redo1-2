@@ -9,50 +9,58 @@ import OpenAI from "openai";
 
 dotenv.config();
 
-// 🔍 DEBUG (this WILL print now)
-console.log("OPENAI RAW:", process.env.OPENAI_API_KEY);
-console.log("SUPABASE URL:", process.env.SUPABASE_URL);
-
 const app = express();
 const PORT = process.env.PORT || 3000;
+
+// ---------- DEBUG ----------
+console.log("OPENAI KEY:", process.env.OPENAI_API_KEY ? "LOADED" : "MISSING");
+console.log("SUPABASE URL:", process.env.SUPABASE_URL ? "LOADED" : "MISSING");
+console.log("SUPABASE KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY ? "LOADED" : "MISSING");
 
 // ---------- MIDDLEWARE ----------
 app.use(express.json());
 app.use(cookieParser());
 
-console.log("SUPABASE KEY:", process.env.SUPABASE_SERVICE_ROLE_KEY);
+// ---------- SUPABASE (SAFE INIT) ----------
+let supabase = null;
 
-// ---------- SUPABASE ----------
-if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
-  console.error("❌ Missing Supabase env vars");
+function getSupabase() {
+  if (supabase) return supabase;
+
+  const url = process.env.SUPABASE_URL;
+  const key = process.env.SUPABASE_SERVICE_ROLE_KEY;
+
+  if (!url || !key) {
+    console.error("❌ Supabase env vars missing");
+    return null;
+  }
+
+  supabase = createClient(url, key);
+  console.log("✅ Supabase initialized");
+
+  return supabase;
 }
-
-const supabase = createClient(
-  process.env.SUPABASE_URL,
-  process.env.SUPABASE_SERVICE_ROLE_KEY
-);
 
 // ---------- OPENAI (SAFE INIT) ----------
 let openai = null;
 
 function getOpenAI() {
-  if (!openai) {
-    if (!process.env.OPENAI_API_KEY) {
-      console.error("❌ OPENAI_API_KEY is missing");
-      return null;
-    }
+  if (openai) return openai;
 
-    openai = new OpenAI({
-      apiKey: process.env.OPENAI_API_KEY
-    });
-
-    console.log("✅ OpenAI initialized");
+  if (!process.env.OPENAI_API_KEY) {
+    console.error("❌ OPENAI_API_KEY missing");
+    return null;
   }
 
+  openai = new OpenAI({
+    apiKey: process.env.OPENAI_API_KEY
+  });
+
+  console.log("✅ OpenAI initialized");
   return openai;
 }
 
-// ---------- IN-MEMORY REFRESH STORE ----------
+// ---------- AUTH STORAGE ----------
 const refreshTokens = new Set();
 
 // ---------- JWT HELPERS ----------
@@ -72,7 +80,7 @@ function createRefreshToken(user) {
   );
 }
 
-// ---------- SET AUTH COOKIES ----------
+// ---------- COOKIE SETTER ----------
 function setAuthCookies(res, user) {
   const accessToken = createAccessToken(user);
   const refreshToken = createRefreshToken(user);
@@ -108,13 +116,16 @@ function auth(req, res, next) {
 
     next();
   } catch (err) {
-    return res.status(401).json({ error: "Invalid or expired token" });
+    return res.status(401).json({ error: "Invalid token" });
   }
 }
 
 // ---------- SIGNUP ----------
 app.post("/signup", async (req, res) => {
   try {
+    const supabase = getSupabase();
+    if (!supabase) return res.status(500).json({ error: "DB not configured" });
+
     const { email, password } = req.body;
 
     const hashedPassword = await bcrypt.hash(password, 12);
@@ -129,9 +140,7 @@ app.post("/signup", async (req, res) => {
 
     setAuthCookies(res, data);
 
-    res.json({
-      user: { id: data.id, email: data.email }
-    });
+    res.json({ user: { id: data.id, email: data.email } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Signup failed" });
@@ -141,6 +150,9 @@ app.post("/signup", async (req, res) => {
 // ---------- LOGIN ----------
 app.post("/login", async (req, res) => {
   try {
+    const supabase = getSupabase();
+    if (!supabase) return res.status(500).json({ error: "DB not configured" });
+
     const { email, password } = req.body;
 
     const { data } = await supabase
@@ -161,9 +173,7 @@ app.post("/login", async (req, res) => {
 
     setAuthCookies(res, data);
 
-    res.json({
-      user: { id: data.id, email: data.email }
-    });
+    res.json({ user: { id: data.id, email: data.email } });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Login failed" });
@@ -197,9 +207,8 @@ app.post("/refresh", (req, res) => {
 
 // ---------- LOGOUT ----------
 app.post("/logout", (req, res) => {
-  const refreshToken = req.cookies.refreshToken;
-
-  refreshTokens.delete(refreshToken);
+  const token = req.cookies.refreshToken;
+  refreshTokens.delete(token);
 
   res.clearCookie("accessToken");
   res.clearCookie("refreshToken");
@@ -207,15 +216,15 @@ app.post("/logout", (req, res) => {
   res.json({ success: true });
 });
 
-// ---------- PROTECTED ----------
+// ---------- DASHBOARD ----------
 app.get("/dashboard", auth, (req, res) => {
   res.json({
-    message: "Welcome to your secure dashboard 🚀",
+    message: "Welcome 🚀",
     user: req.user
   });
 });
 
-// ---------- TEST OPENAI ROUTE ----------
+// ---------- OPENAI TEST ----------
 app.get("/ai-test", async (req, res) => {
   const client = getOpenAI();
 
@@ -229,10 +238,12 @@ app.get("/ai-test", async (req, res) => {
       input: "Say hello from PulsePlay API"
     });
 
-    res.json({ output: response.output[0].content[0].text });
+    res.json({
+      output: response.output[0].content[0].text
+    });
   } catch (err) {
     console.error(err);
-    res.status(500).json({ error: "OpenAI request failed" });
+    res.status(500).json({ error: "OpenAI failed" });
   }
 });
 
@@ -243,5 +254,5 @@ app.get("/", (req, res) => {
 
 // ---------- START ----------
 app.listen(PORT, () => {
-  console.log(`Server running on port ${PORT}`);
+  console.log(`🚀 Server running on port ${PORT}`);
 });
