@@ -5,8 +5,13 @@ import jwt from "jsonwebtoken";
 import cookieParser from "cookie-parser";
 import crypto from "crypto";
 import { createClient } from "@supabase/supabase-js";
+import OpenAI from "openai";
 
 dotenv.config();
+
+// 🔍 DEBUG (this WILL print now)
+console.log("OPENAI RAW:", process.env.OPENAI_API_KEY);
+console.log("SUPABASE URL:", process.env.SUPABASE_URL);
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -16,22 +21,37 @@ app.use(express.json());
 app.use(cookieParser());
 
 // ---------- SUPABASE ----------
+if (!process.env.SUPABASE_URL || !process.env.SUPABASE_SERVICE_ROLE_KEY) {
+  console.error("❌ Missing Supabase env vars");
+}
+
 const supabase = createClient(
   process.env.SUPABASE_URL,
   process.env.SUPABASE_SERVICE_ROLE_KEY
 );
 
-// ---------- IN-MEMORY REFRESH STORE (upgrade later to Redis) ----------
+// ---------- OPENAI (SAFE INIT) ----------
+let openai = null;
+
+function getOpenAI() {
+  if (!openai) {
+    if (!process.env.OPENAI_API_KEY) {
+      console.error("❌ OPENAI_API_KEY is missing");
+      return null;
+    }
+
+    openai = new OpenAI({
+      apiKey: process.env.OPENAI_API_KEY
+    });
+
+    console.log("✅ OpenAI initialized");
+  }
+
+  return openai;
+}
+
+// ---------- IN-MEMORY REFRESH STORE ----------
 const refreshTokens = new Set();
-
-import OpenAI from "openai";
-
-console.log("ENV KEYS:", Object.keys(process.env)); // debug
-console.log("OPENAI VALUE:", process.env.OPENAI_API_KEY);
-
-const client = new OpenAI({
-  apiKey: process.env.OPENAI_API_KEY
-});
 
 // ---------- JWT HELPERS ----------
 function createAccessToken(user) {
@@ -59,14 +79,14 @@ function setAuthCookies(res, user) {
 
   res.cookie("accessToken", accessToken, {
     httpOnly: true,
-    secure: false, // ⚠️ set TRUE in production HTTPS
+    secure: false,
     sameSite: "strict",
     maxAge: 15 * 60 * 1000
   });
 
   res.cookie("refreshToken", refreshToken, {
     httpOnly: true,
-    secure: false, // ⚠️ set TRUE in production HTTPS
+    secure: false,
     sameSite: "strict",
     maxAge: 7 * 24 * 60 * 60 * 1000
   });
@@ -111,6 +131,7 @@ app.post("/signup", async (req, res) => {
       user: { id: data.id, email: data.email }
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Signup failed" });
   }
 });
@@ -142,11 +163,12 @@ app.post("/login", async (req, res) => {
       user: { id: data.id, email: data.email }
     });
   } catch (err) {
+    console.error(err);
     res.status(500).json({ error: "Login failed" });
   }
 });
 
-// ---------- REFRESH TOKEN ----------
+// ---------- REFRESH ----------
 app.post("/refresh", (req, res) => {
   try {
     const token = req.cookies.refreshToken;
@@ -156,7 +178,6 @@ app.post("/refresh", (req, res) => {
     }
 
     const decoded = jwt.verify(token, process.env.JWT_SECRET);
-
     const newAccessToken = createAccessToken(decoded);
 
     res.cookie("accessToken", newAccessToken, {
@@ -184,7 +205,7 @@ app.post("/logout", (req, res) => {
   res.json({ success: true });
 });
 
-// ---------- PROTECTED ROUTE ----------
+// ---------- PROTECTED ----------
 app.get("/dashboard", auth, (req, res) => {
   res.json({
     message: "Welcome to your secure dashboard 🚀",
@@ -192,12 +213,33 @@ app.get("/dashboard", auth, (req, res) => {
   });
 });
 
-// ---------- HEALTH CHECK ----------
+// ---------- TEST OPENAI ROUTE ----------
+app.get("/ai-test", async (req, res) => {
+  const client = getOpenAI();
+
+  if (!client) {
+    return res.status(500).json({ error: "OpenAI not configured" });
+  }
+
+  try {
+    const response = await client.responses.create({
+      model: "gpt-4.1-mini",
+      input: "Say hello from PulsePlay API"
+    });
+
+    res.json({ output: response.output[0].content[0].text });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: "OpenAI request failed" });
+  }
+});
+
+// ---------- HEALTH ----------
 app.get("/", (req, res) => {
   res.json({ status: "PulsePlay API running 🚀" });
 });
 
-// ---------- START SERVER ----------
+// ---------- START ----------
 app.listen(PORT, () => {
   console.log(`Server running on port ${PORT}`);
 });
